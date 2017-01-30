@@ -1,0 +1,129 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:json="http://www.mulesoft.org/schema/mule/json"
+	xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting"
+	xmlns:tracking="http://www.mulesoft.org/schema/mule/ee/tracking"
+	xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw"
+	xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+	xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/ee/tracking http://www.mulesoft.org/schema/mule/ee/tracking/current/mule-tracking-ee.xsd
+http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd">
+	<sub-flow name="cz.aimtec.adsk.authenticationSub_Flow">
+		<db:select config-ref="SQLite_Database_Configuration"
+			doc:name="Select OauthCredentials">
+            <db:parameterized-query><![CDATA[select 
+    c.*, 
+    t.accessToken,
+    t."timeStamp"
+from credentials as c 
+left join tokens as t 
+    on t.csn = c.csn
+    and datetime('now') < datetime((t."timeStamp" + t.expiresIn - 30), 'unixepoch')
+where 
+    c.csn = #[flowVars.customer_number]]]></db:parameterized-query>
+		</db:select>
+		<logger message="SQLiteSelectOauth #[message.payloadAs(java.lang.String)]"
+			level="DEBUG" doc:name="Logger - SQL" />
+		<choice doc:name="Choice">
+			<when
+				expression="#[message.payload.size() == 1 &amp;&amp; message.payload[0].accessToken != null]">
+				<logger message="AccessToken exists" level="INFO" doc:name="Exists" />
+				<dw:transform-message metadata:id="af189c04-12b0-4cb6-85f4-2c4390a29e55"
+					doc:name="Set OauthCredentials">
+					<dw:input-payload doc:sample="sample_data\list_SQLiteSelectOauth.dwl"
+						mimeType="application/java" />
+                    <dw:set-variable variableName="OauthCredentials"><![CDATA[%dw 1.0
+%output application/java
+---
+{
+    accessToken: payload[0].accessToken,
+    callBack: payload[0].callBack,
+    clientSecret: payload[0].clientSecret,
+    timeStamp: payload[0].timeStamp
+} as :object {
+    class : "cz.aimtec.adsk.OauthCredentials"
+}]]></dw:set-variable>
+				</dw:transform-message>
+			</when>
+			<when
+				expression="#[message.payload.size() == 1 &amp;&amp; message.payload[0].accessToken == null]">
+				<logger message="AccessToken missing" level="INFO" doc:name="Missing" />
+				<dw:transform-message metadata:id="4dddb90c-eee5-4996-8373-52269eb2110a"
+					doc:name="Set OauthGetToken">
+					<dw:input-payload doc:sample="sample_data\list_map.dwl"
+						mimeType="application/java" />
+					<dw:set-variable variableName="OauthGetToken"><![CDATA[%dw 1.0
+%output application/java
+---
+{
+    csn: payload[0].csn,
+    callBack: payload[0].callBack,
+    clientId: payload[0].clientId,
+    clientSecret: payload[0].clientSecret
+} as :object {
+    class : "cz.aimtec.adsk.OauthGetToken"
+}]]></dw:set-variable>
+				</dw:transform-message>
+                <http:request config-ref="HTTP_ADSK_Request" path="/v2/oauth/generateaccesstoken" method="POST" sendBodyMode="NEVER" metadata:id="dd4f3d80-b924-42cb-899d-fbf946d73d34" doc:name="HTTP">
+                    <http:request-builder>
+                        <http:query-param paramName="grant_type" value="client_credentials"/>
+                        <http:header headerName="Authorization" value="#[flowVars.OauthGetToken.basicAuthorization]"/>
+                        <http:header headerName="signature" value="#[flowVars.OauthGetToken.signedSignature]"/>
+                        <http:header headerName="timestamp" value="#[flowVars.OauthGetToken.timeStamp]"/>
+                        <http:header headerName="Accept" value="application/json"/>
+                    </http:request-builder>
+                </http:request>
+                <json:json-to-object-transformer doc:name="JSON to Object" returnClass="cz.aimtec.adsk.AccessTokenResponse"/>
+                <set-variable variableName="AccessTokenResponse" value="#[message.payload]" metadata:id="8eef87fc-86fa-497d-93b0-6c455d3722ae" doc:name="Set AccessTokenResponse"/>
+				<db:update config-ref="SQLite_Database_Configuration"
+					doc:name="Update OauthCredentials">
+                    <db:parameterized-query><![CDATA[update tokens
+set 
+	accessToken = #[flowVars.AccessTokenResponse.access_token],
+	"timeStamp" = #[flowVars.OauthGetToken.timeStamp],
+	expiresIn = #[flowVars.AccessTokenResponse.expires_in]
+where
+	csn = #[flowVars.OauthGetToken.csn]]]></db:parameterized-query>
+				</db:update>
+				<dw:transform-message metadata:id="da37c2bf-8f56-47f5-ac68-01c97cd9ee03"
+					doc:name="Set OauthCredentials">
+					<dw:input-payload 
+						 />
+					<dw:input-variable doc:sample="sample_data\OauthGetToken_2.dwl"
+						variableName="OauthGetToken" />
+                    <dw:input-variable doc:sample="sample_data\string.dwl" variableName="accessToken"/>
+                    <dw:input-variable doc:sample="sample_data\json_1.json" mimeType="application/java" variableName="AccessTokenResponse"/>
+                    <dw:input-variable mimeType="application/java" variableName="messageId"/>
+                    <dw:set-variable variableName="OauthCredentials"><![CDATA[%dw 1.0
+%output application/java
+---
+{
+    accessToken: flowVars.AccessTokenResponse.access_token,
+    callBack: flowVars.OauthGetToken.callBack,
+    clientSecret: flowVars.OauthGetToken.clientSecret,
+    timeStamp: flowVars.OauthGetToken.timeStamp
+} as :object {
+    class : "cz.aimtec.adsk.OauthCredentials"
+}]]></dw:set-variable>
+				</dw:transform-message>
+                <remove-variable variableName="#[flowVars.OauthGetToken]" doc:name="Remove OauthGetToken"/>
+			</when>
+			<otherwise>
+				<scripting:component doc:name="Error">
+					<scripting:script engine="Groovy"><![CDATA[throw new java.lang.Exception("Unknown CSN " + flowVars.customer_number)]]></scripting:script>
+				</scripting:component>
+			</otherwise>
+		</choice>
+        <logger message="#[flowVars.OauthGetToken]" level="INFO" doc:name="Logger"/>
+		<set-payload value="#[NullPayload.getInstance()]"
+			doc:name="Null Payload" />
+	</sub-flow>
+</mule>

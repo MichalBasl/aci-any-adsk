@@ -1,0 +1,160 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata" xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw"
+	xmlns:scripting="http://www.mulesoft.org/schema/mule/scripting"
+	xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:apikit="http://www.mulesoft.org/schema/mule/apikit" xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-current.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/scripting http://www.mulesoft.org/schema/mule/scripting/current/mule-scripting.xsd
+http://www.mulesoft.org/schema/mule/apikit http://www.mulesoft.org/schema/mule/apikit/current/mule-apikit.xsd
+http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context-current.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd">
+	<context:property-placeholder location="adsk-${env}.properties" />
+	<http:request-config name="HTTP_ADSK_Request"
+		protocol="HTTPS" host="${adsk.http.host}" port="${adsk.http.port}"
+		doc:name="HTTP Request Configuration" />
+	<http:listener-config name="HTTP_API_Listener"
+		host="${api.http.host}" port="${api.http.port}" doc:name="HTTP Listener Configuration" />
+	<apikit:config name="cz.aimtec.adsk.api-config" raml="cz.aimtec.adsk.api.raml"
+		consoleEnabled="false" doc:name="Router" />
+	<db:generic-config name="SQLite_Database_Configuration"
+		url="jdbc:sqlite:${sqlite.database.path}" driverClassName="org.sqlite.JDBC"
+		doc:name="Generic Database Configuration" >
+        <db:connection-properties>
+            <db:property key="encoding" value="UTF-8"/>
+        </db:connection-properties>
+    </db:generic-config>
+	<flow name="cz.aimtec.adsk.api-main">
+		<http:listener config-ref="HTTP_API_Listener" path="/v1/*"
+			doc:name="HTTP" />
+        <set-variable variableName="messageId" value="#[message.id]" doc:name="messageId"/>
+		<logger message="#['Intercepted incoming message: ' + flowVars.messageId]"
+			level="INFO" doc:name="Logger" />
+        <set-attachment attachmentName="originalPayload" value="#[message.payloadAs(java.lang.String)]" contentType="application/xml" doc:name="originalPayload"/>
+
+		<apikit:router config-ref="cz.aimtec.adsk.api-config"
+			doc:name="APIkit Router" />
+		<exception-strategy ref="cz.aimtec.adsk.api-apiKitGlobalExceptionMapping"
+			doc:name="Reference Exception Strategy" />
+	</flow>
+
+	<flow name="get:/adsk/{customer_number}/test:cz.aimtec.adsk.api-config">
+		<flow-ref name="cz.aimtec.adsk.authenticationSub_Flow"
+			doc:name="cz.aimtec.adsk.authenticationSub_Flow" />
+		<http:request config-ref="HTTP_ADSK_Request" path="/v1/test"
+			method="GET" doc:name="HTTP">
+			<http:request-builder>
+                <http:header headerName="CSN" value="#[flowVars.customer_number]"/>
+                <http:header headerName="Authorization" value="#[flowVars.OauthCredentials.bearerToken]"/>
+                <http:header headerName="signature" value="#[flowVars.OauthCredentials.signedSignature]"/>
+                <http:header headerName="timestamp" value="#[flowVars.OauthCredentials.timeStamp]"/>
+			</http:request-builder>
+		</http:request>
+	</flow>
+	<flow name="post:/adsk/{customer_number}/order:cz.aimtec.adsk.api-config">
+		<set-payload value="#[NullPayload.getInstance()]"
+			doc:name="Set Payload" />
+	</flow>
+	<flow name="get:/adsk/{customer_number}/order:cz.aimtec.adsk.api-config">
+		<choice doc:name="Choice">
+			<when
+				expression="#[message.inboundProperties.'http.query.params'.contract_number != null]">
+				<dw:transform-message doc:name="GetOrderDetails">
+					<dw:set-session-variable variableName="GetOrderDetails"><![CDATA[%dw 1.0
+%output application/java
+---
+{
+    key: "contract_number",
+    value: inboundProperties."http.query.params".contract_number
+}]]></dw:set-session-variable>
+				</dw:transform-message>
+			</when>
+			<otherwise>
+				<scripting:component doc:name="MissingHeader">
+					<scripting:script engine="Groovy"><![CDATA[throw new java.lang.Exception('GetOrder-MissingHeader')]]></scripting:script>
+				</scripting:component>
+			</otherwise>
+		</choice>
+		<flow-ref name="cz.aimtec.adsk.authenticationSub_Flow"
+			doc:name="cz.aimtec.adsk.authenticationSub_Flow" />
+		<http:request config-ref="HTTP_ADSK_Request" path="/v1/orders"
+			method="GET" doc:name="HTTP" sendBodyMode="NEVER">
+			<http:request-builder>
+                <http:query-param paramName="#[sessionVars.GetOrderDetails.key]" value="#[sessionVars.GetOrderDetails.value]"/>
+                <http:query-param paramName="customer_number" value="#[flowVars.customer_number]"/>
+                <http:header headerName="Authorization" value="#[flowVars.OauthCredentials.bearerAuthorization]"/>
+                <http:header headerName="CSN" value="#[flowVars.customer_number]"/>
+                <http:header headerName="signature" value="#[flowVars.OauthCredentials.signedSignature]"/>
+                <http:header headerName="timestamp" value="#[flowVars.OauthCredentials.timeStamp]"/>
+			</http:request-builder>
+		</http:request>
+	</flow>
+	<flow name="get:/adsk/{customer_number}/orderList:cz.aimtec.adsk.api-config">
+		<set-payload value="#[NullPayload.getInstance()]"
+			doc:name="Set Payload" />
+	</flow>
+	<flow name="get:/adsk/{customer_number}/invoice:cz.aimtec.adsk.api-config">
+		<set-payload value="#[NullPayload.getInstance()]"
+			doc:name="Set Payload" />
+	</flow>
+	<flow
+		name="get:/adsk/{customer_number}/invocieList:cz.aimtec.adsk.api-config">
+		<set-payload value="#[NullPayload.getInstance()]"
+			doc:name="Set Payload" />
+	</flow>
+	<flow name="get:/adsk/{customer_number}/price:cz.aimtec.adsk.api-config">
+		<set-payload value="#[NullPayload.getInstance()]"
+			doc:name="Set Payload" />
+	</flow>
+	<apikit:mapping-exception-strategy
+		name="cz.aimtec.adsk.api-apiKitGlobalExceptionMapping"
+		enableNotifications="false">
+		<apikit:mapping statusCode="404">
+			<apikit:exception
+				value="org.mule.module.apikit.exception.NotFoundException" />
+			<set-property propertyName="Content-Type" value="application/json"
+				doc:name="Property" />
+			<set-payload
+				value="{ &quot;message&quot;: &quot;Resource not found&quot; }"
+				doc:name="Set Payload" />
+		</apikit:mapping>
+		<apikit:mapping statusCode="405">
+			<apikit:exception
+				value="org.mule.module.apikit.exception.MethodNotAllowedException" />
+			<set-property propertyName="Content-Type" value="application/json"
+				doc:name="Property" />
+			<set-payload
+				value="{ &quot;message&quot;: &quot;Method not allowed&quot; }"
+				doc:name="Set Payload" />
+		</apikit:mapping>
+		<apikit:mapping statusCode="415">
+			<apikit:exception
+				value="org.mule.module.apikit.exception.UnsupportedMediaTypeException" />
+			<set-property propertyName="Content-Type" value="application/json"
+				doc:name="Property" />
+			<set-payload
+				value="{ &quot;message&quot;: &quot;Unsupported media type&quot; }"
+				doc:name="Set Payload" />
+		</apikit:mapping>
+		<apikit:mapping statusCode="406">
+			<apikit:exception
+				value="org.mule.module.apikit.exception.NotAcceptableException" />
+			<set-property propertyName="Content-Type" value="application/json"
+				doc:name="Property" />
+			<set-payload value="{ &quot;message&quot;: &quot;Not acceptable&quot; }"
+				doc:name="Set Payload" />
+		</apikit:mapping>
+		<apikit:mapping statusCode="400">
+			<apikit:exception
+				value="org.mule.module.apikit.exception.BadRequestException" />
+			<set-property propertyName="Content-Type" value="application/json"
+				doc:name="Property" />
+			<set-payload value="{ &quot;message&quot;: &quot;Bad request&quot; }"
+				doc:name="Set Payload" />
+		</apikit:mapping>
+	</apikit:mapping-exception-strategy>
+</mule>

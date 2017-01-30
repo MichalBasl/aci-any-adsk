@@ -1,0 +1,98 @@
+#%RAML 0.8
+title: Sample API
+version: 1.0
+
+/adsk:
+  /{customer_number}:
+    /test:
+      get:
+        description: Generic test of connection
+        responses: 
+          200:
+            description: Success
+            body:
+              application/json: 
+          401:
+            description: Unauthorized
+            body:
+              application/json: 
+    /orderList:
+      get:
+        description: Retrieve list of purchase orders
+        queryParameters: 
+          date_from:
+          date_to:
+        responses: 
+          200:
+            description: Success
+            body:
+              application/json: 
+          401:
+            description: Unauthorized
+            body:
+              application/json: 
+    /order:
+      get:
+        description: Retrive details of purchase order
+        queryParameters:
+          serial_number:
+          contract_number:
+          partner_po:
+          customer_po:
+          order_number:
+        responses:
+          200:
+            description: Success
+            body:
+              application/json: 
+          401:
+            description: Unauthorized
+            body:
+              application/json: 
+      post:
+        description: Post new purchase order
+    /invocieList:
+      get:
+        description: Retrieve list of invoices
+        queryParameters: 
+          date_from:
+          date_to:
+        responses: 
+          200:
+            description: Success
+            body:
+              application/json: 
+          401:
+            description: Unauthorized
+            body:
+              application/json: 
+    /invoice:
+      get:
+        description: Retrieve specific invoice
+        queryParameters: 
+          invoice_number:
+        responses: 
+          200:
+            description: Success
+            body:
+              application/json: 
+          401:
+            description: Unauthorized
+            body:
+              application/json: 
+    /price:
+      get:
+        description: Retrieve my specific price
+        queryParameters: 
+          part_number:
+          price_date:
+          quantity:
+        responses: 
+          200:
+            description: Success
+            body:
+              application/json: 
+          401:
+            description: Unauthorized
+            body:
+              application/json: 
